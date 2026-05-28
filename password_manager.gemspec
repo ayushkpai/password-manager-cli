@@ -1,6 +1,6 @@
 Gem::Specification.new do |spec|
   spec.name        = "pm"
-  spec.version     = "0.0.2"
+  spec.version     = "0.0.3"
   spec.author      = "Ayush Pai"
   spec.email       = "ayushpai@ayushpai.com"
   spec.summary     = "A gem for password manager"
