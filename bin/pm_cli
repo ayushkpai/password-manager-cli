@@ -1,14 +1,34 @@
 #!/usr/bin/env ruby
+
 require "dotenv"
 require "base64"
 
-Dotenv.load
+possible_paths = [
+  File.expand_path("~/src/ruby/ruby/.password-manager/.env", Dir.pwd),
+  File.join(Dir.pwd, ".env")
+]
+
+env_file = possible_paths.find { |f| File.exist?(f) }
+
+unless File.exist?(env_file)
+  abort("Missing .env file in current directory")
+end
+
+Dotenv.load(env_file)
+
+required = %w[PASSWORDS_FILE USERNAME_FILE PASSWORD_FILE]
+
+missing = required.select { |k| ENV[k].to_s.strip.empty? }
+
+unless missing.empty?
+  abort("Missing environment variables: #{missing.join(', ')}")
+end
+
+PASSWORDS_FILE = ENV["PASSWORDS_FILE"]
+LOGIN_USERNAME_FILE = ENV["USERNAME_FILE"]
+LOGIN_PASSWORD_FILE = ENV["PASSWORD_FILE"]
 
 @passwords = {}
-
-PASSWORDS_FILE=ENV["PASSWORDS_FILE"]
-LOGIN_USERNAME_FILE=ENV["USERNAME_FILE"]
-LOGIN_PASSWORD_FILE=ENV["PASSWORD_FILE"]
 
 def encrypt(text)
   Base64.strict_encode64(text)
@@ -19,99 +39,84 @@ def decrypt(text)
   Base64.strict_decode64(text)
 end
 
-def get_username()
-  file = File.open(LOGIN_USERNAME_FILE, "r")
-    Base64.decode64(file.read())
+def get_username
+  return nil unless File.exist?(LOGIN_USERNAME_FILE)
+  File.read(LOGIN_USERNAME_FILE).strip
 end
 
-def get_password()
-  file = File.open(LOGIN_PASSWORD_FILE, "r")
-    Base64.decode64(file.read())
+def get_password
+  return nil unless File.exist?(LOGIN_PASSWORD_FILE)
+  Base64.decode64(File.read(LOGIN_PASSWORD_FILE)).strip
 end
+
 
 def read_from_file
   return unless File.exist?(PASSWORDS_FILE)
 
-  File.open(PASSWORDS_FILE, "r") do |file|
-    file.each_line do |line|
-      line = line.strip
+  File.foreach(PASSWORDS_FILE) do |line|
+    line = line.strip
+    next if line.empty?
+    next unless line.include?("/")
 
-      next if line.empty?
+    app, encrypted_password = line.split("/", 2)
+    next if encrypted_password.nil? || encrypted_password.empty?
 
-      unless line.include?("/")
-        next
-      end
-
-      app, encrypted_password = line.split("/", 2)
-
-      if encrypted_password.nil? || encrypted_password.empty?
-        next
-      end
-
-      begin
-        decrypted_password = decrypt(encrypted_password)
-        @passwords[app] = decrypted_password
-      rescue ArgumentError
-      end
+    begin
+      @passwords[app] = decrypt(encrypted_password)
+    rescue ArgumentError
+      next
     end
   end
 end
 
 def write_to_file(app_name, password)
   File.open(PASSWORDS_FILE, "a") do |file|
-    encrypted_password = encrypt(password)
-    file.puts("#{app_name}/#{encrypted_password}")
+    file.puts("#{app_name}/#{encrypt(password)}")
   end
 end
 
-def run()
-  begin
-    print "Type the name of an app "
-    ask = gets.chomp
+def run
+  loop do
+    print "Type app name (or Ctrl+C to exit): "
+    app = gets&.chomp&.strip
+    break if app.nil? || app.empty?
 
-    ask = ask.strip()
-
-    if @passwords.key?(ask)
-      puts "The password of #{ask} is #{@passwords[ask]}"
+    if @passwords.key?(app)
+      puts "Password for #{app}: #{@passwords[app]}"
     else
-      print "What is the password of #{ask} "
-      add_1 = gets.chomp
-      add_1 = add_1.strip()
+      print "Set password for #{app}: "
+      pass = gets&.chomp&.strip
+      next if pass.nil? || pass.empty?
 
-      @passwords[ask] = add_1
-      write_to_file(ask, add_1)
+      @passwords[app] = pass
+      write_to_file(app, pass)
 
       puts "Password saved successfully"
     end
-
-    after(100, run)
-
-  rescue Interrupt
-    exit
   end
 end
 
-def ask_question()
-  begin
-    print "Enter username "
-    username = gets.chomp
+def ask_question
+  print "Enter username: "
+  username = gets&.chomp&.strip
 
-    if username == get_username()
-      print "Enter password "
-      password = gets.chomp
+  if username == get_username
+    print "Enter password: "
+    password = gets&.chomp&.strip
 
-      if password == get_password()
-        run()
-      else
-        puts "Unauthorized access"
-      end
+    if password == get_password
+      read_from_file
+      run
     else
       puts "Unauthorized access"
     end
-  rescue Interrupt
-    exit
+  else
+    puts "Unauthorized access"
   end
 end
 
-read_from_file()
-ask_question()
+begin
+  ask_question
+rescue Interrupt
+  puts "\nExiting..."
+end
