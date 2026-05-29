@@ -1,5 +1,6 @@
 #!/usr/bin/env ruby
 require "base64"
+
 @passwords = {}
 
 PASSWORDS_FILE="/Users/ayushpai/.config/pm/passwords.txt"
@@ -47,7 +48,6 @@ def read_from_file
       begin
         decrypted_password = decrypt(encrypted_password)
         @passwords[app] = decrypted_password
-
       rescue ArgumentError
       end
     end
@@ -69,11 +69,9 @@ def run()
 
     if @passwords.key?(ask)
         puts "The password of #{ask} is #{@passwords[ask]}"
-
     else
         print "What is the password of #{ask} "
         add_1 = gets.chomp
-
         add_1 = add_1.strip()
 
         @passwords[ask] = add_1
@@ -90,19 +88,16 @@ def ask_question()
   username = gets.chomp
 
   if username == get_username()
-
       print "Enter password "
       password = gets.chomp
 
       if password == get_password()
-          run()
-
+        run()
       else
-          puts "Unauthorized access"
+        puts "Unauthorized access"
       end
-
   else
-      puts "Unauthorized access"
+    puts "Unauthorized access"
   end
 end
 
