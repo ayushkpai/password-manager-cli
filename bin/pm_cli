@@ -1,11 +1,14 @@
 #!/usr/bin/env ruby
+require "dotenv"
 require "base64"
+
+Dotenv.load
 
 @passwords = {}
 
-PASSWORDS_FILE="/Users/ayushpai/.config/pm/cli.txt"
-LOGIN_USERNAME_FILE="/Users/ayushpai/.config/pm/login/username.txt"
-LOGIN_PASSWORD_FILE="/Users/ayushpai/.config/pm/login/password.txt"
+PASSWORDS_FILE=ENV["PASSWORDS_FILE"]
+LOGIN_USERNAME_FILE=ENV["USERNAME_FILE"]
+LOGIN_PASSWORD_FILE=ENV["PASSWORD_FILE"]
 
 def encrypt(text)
   Base64.strict_encode64(text)
