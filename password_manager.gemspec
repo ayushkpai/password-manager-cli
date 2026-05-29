@@ -1,6 +1,6 @@
 Gem::Specification.new do |spec|
   spec.name        = "pm_cli"
-  spec.version     = "0.1.6"
+  spec.version     = "0.1.7"
   spec.author      = "Ayush Pai"
   spec.email       = "ayushpai@ayushpai.com"
   spec.summary     = "A gem for password manager"
