@@ -62,25 +62,25 @@ def write_to_file(app_name, password)
 end
 
 def run()
-    print "Type the name of an app "
-    ask = gets.chomp
+  print "Type the name of an app "
+  ask = gets.chomp
 
-    ask = ask.strip()
+  ask = ask.strip()
 
-    if @passwords.key?(ask)
-        puts "The password of #{ask} is #{@passwords[ask]}"
-    else
-        print "What is the password of #{ask} "
-        add_1 = gets.chomp
-        add_1 = add_1.strip()
+  if @passwords.key?(ask)
+    puts "The password of #{ask} is #{@passwords[ask]}"
+  else
+    print "What is the password of #{ask} "
+    add_1 = gets.chomp
+    add_1 = add_1.strip()
 
-        @passwords[ask] = add_1
-        write_to_file(ask, add_1)
+    @passwords[ask] = add_1
+    write_to_file(ask, add_1)
 
-        puts "Password saved successfully"
-    end
+    puts "Password saved successfully"
+  end
 
-    after(100, run)
+  after(100, run)
 end
 
 def ask_question()
@@ -88,14 +88,14 @@ def ask_question()
   username = gets.chomp
 
   if username == get_username()
-      print "Enter password "
-      password = gets.chomp
+    print "Enter password "
+    password = gets.chomp
 
-      if password == get_password()
-        run()
-      else
-        puts "Unauthorized access"
-      end
+    if password == get_password()
+      run()
+    else
+      puts "Unauthorized access"
+    end
   else
     puts "Unauthorized access"
   end
