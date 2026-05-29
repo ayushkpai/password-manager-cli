@@ -1,10 +1,9 @@
 #!/usr/bin/env ruby
-
 require "dotenv"
 require "base64"
 
 possible_paths = [
-  File.expand_path("~/src/ruby/ruby/.password-manager/.env", Dir.pwd),
+  File.expand_path("~/src/ruby/ruby/.password-manager-cli/.env", Dir.pwd),
   File.join(Dir.pwd, ".env")
 ]
 
