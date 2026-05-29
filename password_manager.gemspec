@@ -9,5 +9,6 @@ Gem::Specification.new do |spec|
   spec.files       = Dir["{bin}/*"]
   spec.executables = ["pm_cli"]
 
+  spec.add_dependency "dotenv"
   spec.required_ruby_version = ">= 3.2.0"
 end
