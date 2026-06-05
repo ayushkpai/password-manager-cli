@@ -1,121 +1,238 @@
 #!/usr/bin/env ruby
-require "dotenv"
+
+require "openssl"
+require "json"
 require "base64"
+require "securerandom"
+require "io/console"
 
-possible_paths = [
-  File.expand_path("~/src/ruby/ruby/.password-manager-cli/.env", Dir.pwd),
-  File.join(Dir.pwd, ".env")
-]
+VAULT_FILE = "vault.json"
+ITERATIONS = 600_000
+KEY_LEN = 32
 
-env_file = possible_paths.find { |f| File.exist?(f) }
+def load_vault
+  return nil unless File.exist?(VAULT_FILE)
 
-unless File.exist?(env_file)
-  abort("Missing .env file in current directory")
+  JSON.parse(File.read(VAULT_FILE))
+rescue JSON::ParserError
+  puts "Vault file corrupted. Delete vault.json to reset."
+  exit
 end
 
-Dotenv.load(env_file)
-
-required = %w[PASSWORDS_FILE USERNAME_FILE PASSWORD_FILE]
-
-missing = required.select { |k| ENV[k].to_s.strip.empty? }
-
-unless missing.empty?
-  abort("Missing environment variables: #{missing.join(', ')}")
+def save_vault(vault)
+  File.write(VAULT_FILE, JSON.pretty_generate(vault))
+  File.chmod(0600, VAULT_FILE)
 end
 
-PASSWORDS_FILE = ENV["PASSWORDS_FILE"]
-LOGIN_USERNAME_FILE = ENV["USERNAME_FILE"]
-LOGIN_PASSWORD_FILE = ENV["PASSWORD_FILE"]
-
-@passwords = {}
-
-def encrypt(text)
-  Base64.strict_encode64(text)
+def derive_key(password, salt)
+  OpenSSL::PKCS5.pbkdf2_hmac(
+    password,
+    salt,
+    ITERATIONS,
+    KEY_LEN,
+    "sha256"
+  )
 end
 
-def decrypt(text)
-  return nil if text.nil? || text.empty?
-  Base64.strict_decode64(text)
+def encrypt(text, key)
+  cipher = OpenSSL::Cipher.new("aes-256-gcm")
+  cipher.encrypt
+
+  iv = SecureRandom.random_bytes(12)
+  cipher.key = key
+  cipher.iv = iv
+
+  ciphertext = cipher.update(text) + cipher.final
+  tag = cipher.auth_tag
+
+  {
+    "iv" => Base64.strict_encode64(iv),
+    "tag" => Base64.strict_encode64(tag),
+    "data" => Base64.strict_encode64(ciphertext)
+  }
 end
 
-def get_username
-  return nil unless File.exist?(LOGIN_USERNAME_FILE)
-  File.read(LOGIN_USERNAME_FILE).strip
+def decrypt(enc, key)
+  cipher = OpenSSL::Cipher.new("aes-256-gcm")
+  cipher.decrypt
+
+  cipher.key = key
+  cipher.iv = Base64.strict_decode64(enc["iv"])
+  cipher.auth_tag = Base64.strict_decode64(enc["tag"])
+
+  data = Base64.strict_decode64(enc["data"])
+
+  cipher.update(data) + cipher.final
+rescue
+  nil
 end
 
-def get_password
-  return nil unless File.exist?(LOGIN_PASSWORD_FILE)
-  Base64.decode64(File.read(LOGIN_PASSWORD_FILE)).strip
+def prompt_hidden(msg)
+  print msg
+  STDIN.noecho(&:gets).chomp.tap { puts }
 end
 
+def create_account
+  return load_vault if File.exist?(VAULT_FILE)
 
-def read_from_file
-  return unless File.exist?(PASSWORDS_FILE)
+  pass1 = prompt_hidden("Create master password: ")
+  pass2 = prompt_hidden("Confirm master password: ")
 
-  File.foreach(PASSWORDS_FILE) do |line|
-    line = line.strip
-    next if line.empty?
-    next unless line.include?("/")
-
-    app, encrypted_password = line.split("/", 2)
-    next if encrypted_password.nil? || encrypted_password.empty?
-
-    begin
-      @passwords[app] = decrypt(encrypted_password)
-    rescue ArgumentError
-      next
-    end
+  if pass1 != pass2
+    puts "Passwords do not match"
+    exit
   end
+
+  salt = SecureRandom.random_bytes(16)
+  key = derive_key(pass1, salt)
+
+  vault = {
+    "salt" => Base64.strict_encode64(salt),
+    "verify" => encrypt("ok", key),
+    "passwords" => {}
+  }
+
+  save_vault(vault)
+  puts "Account created"
+
+  vault
 end
 
-def write_to_file(app_name, password)
-  File.open(PASSWORDS_FILE, "a") do |file|
-    file.puts("#{app_name}/#{encrypt(password)}")
+def authenticate
+  vault = load_vault
+
+  if vault.nil? || !vault.is_a?(Hash) || !vault["salt"]
+    vault = create_account
   end
-end
 
-def run
-  loop do
-    print "Type app name (or Ctrl+C to exit): "
-    app = gets&.chomp&.strip
-    break if app.nil? || app.empty?
+  password = prompt_hidden("Master password: ")
 
-    if @passwords.key?(app)
-      puts "Password for #{app}: #{@passwords[app]}"
-    else
-      print "Set password for #{app}: "
-      pass = gets&.chomp&.strip
-      next if pass.nil? || pass.empty?
+  salt = Base64.strict_decode64(vault["salt"])
+  key = derive_key(password, salt)
 
-      @passwords[app] = pass
-      write_to_file(app, pass)
-
-      puts "Password saved successfully"
-    end
+  unless vault["verify"] && decrypt(vault["verify"], key) == "ok"
+    puts "Wrong master password"
+    return nil
   end
+
+  [vault, key]
 end
 
-def ask_question
-  print "Enter username: "
-  username = gets&.chomp&.strip
+def list(vault)
+  puts "\nSaved entries:"
+  vault["passwords"].each_key { |k| puts "- #{k}" }
+end
 
-  if username == get_username
-    print "Enter password: "
-    password = gets&.chomp&.strip
+def add(vault, key)
+  print "Service name: "
+  name = gets&.chomp
+  return if name.to_s.empty?
 
-    if password == get_password
-      read_from_file
-      run
-    else
-      puts "Unauthorized access"
-    end
+  pass = prompt_hidden("Password: ")
+
+  vault["passwords"][name] = encrypt(pass, key)
+  save_vault(vault)
+
+  puts "Saved"
+end
+
+def view(vault, key)
+  print "Service name: "
+  name = gets&.chomp
+
+  data = vault["passwords"][name]
+  return puts "Not found" unless data
+
+  pass = decrypt(data, key)
+  puts pass ? "Password: #{pass}" : "Decryption failed"
+end
+
+def delete_entry(vault)
+  print "Service name: "
+  name = gets&.chomp
+
+  if vault["passwords"].delete(name)
+    save_vault(vault)
+    puts "Deleted"
   else
-    puts "Unauthorized access"
+    puts "Not found"
+  end
+end
+
+def change_master(vault, key)
+  old_key = key
+
+  unless decrypt(vault["verify"], old_key) == "ok"
+    puts "Wrong password"
+    return
+  end
+
+  new1 = prompt_hidden("New master password: ")
+  new2 = prompt_hidden("Confirm new password: ")
+  return puts "Mismatch" if new1 != new2
+
+  new_salt = SecureRandom.random_bytes(16)
+  new_key = derive_key(new1, new_salt)
+
+  new_passwords = {}
+
+  vault["passwords"].each do |k, v|
+    plain = decrypt(v, old_key)
+    new_passwords[k] = encrypt(plain, new_key)
+  end
+
+  vault["salt"] = Base64.strict_encode64(new_salt)
+  vault["verify"] = encrypt("ok", new_key)
+  vault["passwords"] = new_passwords
+
+  save_vault(vault)
+
+  puts "Master password updated"
+end
+
+def delete_account
+  confirm = prompt_hidden("Type DELETE to remove account: ")
+
+  if confirm == "DELETE"
+    File.delete(VAULT_FILE) if File.exist?(VAULT_FILE)
+    puts "Account deleted"
+    exit
+  else
+    puts "Cancelled"
+  end
+end
+
+def menu(vault, key)
+  loop do
+    puts "\n1. List"
+    puts "2. Add"
+    puts "3. View"
+    puts "4. Delete entry"
+    puts "5. Change master password"
+    puts "6. Delete account"
+    puts "7. Exit"
+
+    print "Choice: "
+    c = gets&.chomp
+
+    case c
+    when "1" then list(vault)
+    when "2" then add(vault, key)
+    when "3" then view(vault, key)
+    when "4" then delete_entry(vault)
+    when "5" then change_master(vault, key)
+    when "6" then delete_account
+    when "7" then break
+    else puts "Invalid"
+    end
   end
 end
 
 begin
-  ask_question
+  result = authenticate
+  exit unless result
+
+  vault, key = result
+  menu(vault, key)
 rescue Interrupt
-  puts "\nExiting..."
 end
