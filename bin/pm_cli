@@ -1,22 +1,21 @@
 #!/usr/bin/env ruby
 
+require "dotenv/load"
 require "openssl"
 require "json"
 require "base64"
 require "securerandom"
 require "io/console"
 
-VAULT_FILE = "vault.json"
-ITERATIONS = 600_000
+VAULT_FILE = ENV["VAULT_FILE"]
+ITERATIONS = (ENV["ITERATIONS"] || 600_000).to_i
 KEY_LEN = 32
 
 def load_vault
   return nil unless File.exist?(VAULT_FILE)
 
-  JSON.parse(File.read(VAULT_FILE))
-rescue JSON::ParserError
-  puts "Vault file corrupted. Delete vault.json to reset."
-  exit
+  vault = JSON.parse(File.read(VAULT_FILE))
+  vault["passwords"] ||= {}
 end
 
 def save_vault(vault)
@@ -87,6 +86,7 @@ def create_account
   key = derive_key(pass1, salt)
 
   vault = {
+    "version": 1,
     "salt" => Base64.strict_encode64(salt),
     "verify" => encrypt("ok", key),
     "passwords" => {}
@@ -104,6 +104,8 @@ def authenticate
   if vault.nil? || !vault.is_a?(Hash) || !vault["salt"]
     vault = create_account
   end
+
+  vault["passwords"] ||= {}   # ✅ ADD THIS HERE
 
   password = prompt_hidden("Master password: ")
 
@@ -164,12 +166,12 @@ def change_master(vault, key)
 
   unless decrypt(vault["verify"], old_key) == "ok"
     puts "Wrong password"
-    return
+    return key
   end
 
   new1 = prompt_hidden("New master password: ")
   new2 = prompt_hidden("Confirm new password: ")
-  return puts "Mismatch" if new1 != new2
+  return key if new1 != new2
 
   new_salt = SecureRandom.random_bytes(16)
   new_key = derive_key(new1, new_salt)
@@ -178,6 +180,7 @@ def change_master(vault, key)
 
   vault["passwords"].each do |k, v|
     plain = decrypt(v, old_key)
+    next if plain.nil?
     new_passwords[k] = encrypt(plain, new_key)
   end
 
@@ -188,6 +191,8 @@ def change_master(vault, key)
   save_vault(vault)
 
   puts "Master password updated"
+
+  new_key   # ⭐ IMPORTANT
 end
 
 def delete_account
@@ -220,7 +225,8 @@ def menu(vault, key)
     when "2" then add(vault, key)
     when "3" then view(vault, key)
     when "4" then delete_entry(vault)
-    when "5" then change_master(vault, key)
+    when "5"
+      key = change_master(vault, key)
     when "6" then delete_account
     when "7" then break
     else puts "Invalid"
