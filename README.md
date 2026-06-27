@@ -21,5 +21,5 @@
 - To run the project
 
     ```
-    ruby bin/pm_cli.py
+    bin/pm_cli
     ```
