@@ -8,9 +8,13 @@
     git clone git@github.com:ayushkpai/password-manager-cli.git
     ```
     
-- Next install ruby
+- Next install ruby and add dependencies
 
     Also documented in dotfiles
+
+    ```
+    gem install dotenv
+    ```
 
 - Create a .env
 
