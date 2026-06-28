@@ -1,15 +1,36 @@
 #!/usr/bin/env ruby
 
-require "dotenv/load"
+require "dotenv"
 require "openssl"
 require "json"
 require "base64"
 require "securerandom"
 require "io/console"
+require "fileutils"
+
+CONFIG_DIR = File.join(Dir.home, ".config", "pm")
+ENV_FILE = File.join(CONFIG_DIR, ".env")
+
+Dotenv.load(ENV_FILE)
 
 VAULT_FILE = ENV["VAULT_FILE"]
 ITERATIONS = (ENV["ITERATIONS"] || 600_000).to_i
 KEY_LEN = 32
+
+abort <<~MSG if VAULT_FILE.nil? || VAULT_FILE.empty?
+Missing configuration.
+
+Create:
+
+  #{ENV_FILE}
+
+Example:
+
+  VAULT_FILE=#{CONFIG_DIR}/config.json
+  ITERATIONS=600000
+MSG
+
+FileUtils.mkdir_p(File.dirname(VAULT_FILE))
 
 def load_vault
   return nil unless File.exist?(VAULT_FILE)
