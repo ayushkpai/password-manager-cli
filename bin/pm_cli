@@ -10,53 +10,39 @@ require "fileutils"
 
 CONFIG_DIR = File.join(Dir.home, ".config", "pm")
 ENV_FILE = File.join(CONFIG_DIR, ".env")
-
 Dotenv.load(ENV_FILE)
 
 VAULT_FILE = ENV["VAULT_FILE"]
-ITERATIONS = (ENV["ITERATIONS"] || 600_000).to_i
+ITERATIONS = (ENV["ITERATIONS"] || "600000").to_i
 KEY_LEN = 32
 
-abort <<~MSG if VAULT_FILE.nil? || VAULT_FILE.empty?
-Missing configuration.
-
-Create:
-
-  #{ENV_FILE}
-
-Example:
-
-  VAULT_FILE=#{CONFIG_DIR}/config.json
-  ITERATIONS=600000
-MSG
+abort "Missing VAULT_FILE in env" if VAULT_FILE.nil? || VAULT_FILE.empty?
 
 FileUtils.mkdir_p(File.dirname(VAULT_FILE))
 
-def load_vault
-  return nil unless File.exist?(VAULT_FILE)
-
-  begin
-    vault = JSON.parse(File.read(VAULT_FILE))
-    vault["passwords"] ||= {}
-    vault
-  rescue
-    nil
-  end
+def b64e(x)
+  Base64.strict_encode64(x)
 end
 
-def save_vault(vault)
-  File.write(VAULT_FILE, JSON.pretty_generate(vault))
+def b64d(x)
+  Base64.strict_decode64(x.to_s.strip)
+end
+
+def load_vault
+  return nil unless File.exist?(VAULT_FILE)
+  v = JSON.parse(File.read(VAULT_FILE)) rescue nil
+  return nil unless v
+  v["passwords"] ||= {}
+  v
+end
+
+def save_vault(v)
+  File.write(VAULT_FILE, JSON.pretty_generate(v))
   File.chmod(0600, VAULT_FILE)
 end
 
 def derive_key(password, salt)
-  OpenSSL::PKCS5.pbkdf2_hmac(
-    password,
-    salt,
-    ITERATIONS,
-    KEY_LEN,
-    "sha256"
-  )
+  OpenSSL::PKCS5.pbkdf2_hmac(password, salt, ITERATIONS, KEY_LEN, "sha256")
 end
 
 def encrypt(text, key)
@@ -67,13 +53,13 @@ def encrypt(text, key)
   cipher.key = key
   cipher.iv = iv
 
-  ciphertext = cipher.update(text) + cipher.final
+  ct = cipher.update(text) + cipher.final
   tag = cipher.auth_tag
 
   {
-    "iv" => Base64.strict_encode64(iv),
-    "tag" => Base64.strict_encode64(tag),
-    "data" => Base64.strict_encode64(ciphertext)
+    "iv" => b64e(iv),
+    "tag" => b64e(tag),
+    "data" => b64e(ct)
   }
 end
 
@@ -82,17 +68,17 @@ def decrypt(enc, key)
   cipher.decrypt
 
   cipher.key = key
-  cipher.iv = Base64.strict_decode64(enc["iv"])
-  cipher.auth_tag = Base64.strict_decode64(enc["tag"])
+  cipher.iv = b64d(enc["iv"])
+  cipher.auth_tag = b64d(enc["tag"])
 
-  data = Base64.strict_decode64(enc["data"])
+  data = b64d(enc["data"])
 
   (cipher.update(data) + cipher.final).force_encoding("UTF-8")
 rescue
   nil
 end
 
-def prompt_hidden(msg)
+def prompt(msg)
   print msg
   STDIN.noecho(&:gets).chomp.tap { puts }
 end
@@ -100,171 +86,85 @@ end
 def create_account
   return load_vault if File.exist?(VAULT_FILE)
 
-  pass1 = prompt_hidden("Create master password: ")
-  pass2 = prompt_hidden("Confirm master password: ")
-
-  if pass1 != pass2
-    puts "Passwords do not match"
-    exit
-  end
+  p1 = prompt("Create master password: ")
+  p2 = prompt("Confirm master password: ")
+  return unless p1 == p2
 
   salt = SecureRandom.random_bytes(16)
-  key = derive_key(pass1, salt)
+  key = derive_key(p1, salt)
 
-  vault = {
-    "version" => 1,
-    "salt" => Base64.strict_encode64(salt),
+  v = {
+    "salt" => b64e(salt),
     "verify" => encrypt("ok", key),
     "passwords" => {}
   }
 
-  save_vault(vault)
-  puts "Account created"
-
-  vault
+  save_vault(v)
+  v
 end
 
 def authenticate
-  vault = load_vault
+  v = load_vault
+  v = create_account if v.nil?
 
-  if vault.nil? || !vault.is_a?(Hash) || !vault["salt"]
-    vault = create_account
-  end
+  pass = prompt("Master password: ")
+  salt = b64d(v["salt"])
+  key = derive_key(pass, salt)
 
-  vault["passwords"] ||= {}   # ✅ ADD THIS HERE
+  return nil unless decrypt(v["verify"], key) == "ok"
 
-  password = prompt_hidden("Master password: ")
-
-  salt = Base64.strict_decode64(vault["salt"])
-  key = derive_key(password, salt)
-
-  unless vault["verify"] && decrypt(vault["verify"], key) == "ok"
-    puts "Wrong master password"
-    return nil
-  end
-
-  [vault, key]
+  [v, key]
 end
 
-def list(vault)
-  puts "\nSaved entries:"
-  vault["passwords"].each_key { |k| puts "- #{k}" }
+def list(v)
+  puts "\nSaved services:"
+  v["passwords"].each_key { |k| puts "- #{k}" }
 end
 
-def add(vault, key)
-  print "Service name: "
-  name = gets&.chomp
-  return if name.to_s.empty?
+def add(v, key)
+  print "Service: "
+  name = gets.chomp
+  print "Password: "
+  pass = gets.chomp
 
-  pass = prompt_hidden("Password: ")
-
-  vault["passwords"][name] = encrypt(pass, key)
-  save_vault(vault)
-
-  puts "Saved"
+  v["passwords"][name] = encrypt(pass, key)
+  save_vault(v)
 end
 
-def view(vault, key)
-  print "Service name: "
-  if data.nil?
-    puts "Not found"
-    return
-  end
+def view(v, key)
+  print "Service: "
+  name = gets.chomp
+  enc = v["passwords"][name]
+  return puts "Not found" unless enc
 
-  pass = decrypt(data, key)
-  puts pass ? "Password: #{pass}" : "Decryption failed"
+  puts decrypt(enc, key)
 end
 
-def delete_entry(vault)
-  print "Service name: "
-  name = gets&.chomp
-
-  if vault["passwords"].delete(name)
-    save_vault(vault)
-    puts "Deleted"
-  else
-    puts "Not found"
-  end
+def delete(v)
+  print "Service: "
+  name = gets.chomp
+  v["passwords"].delete(name)
+  save_vault(v)
 end
 
-def change_master(vault, key)
-  old_key = key
-
-  unless decrypt(vault["verify"], old_key) == "ok"
-    puts "Wrong password"
-    return key
-  end
-
-  new1 = prompt_hidden("New master password: ")
-  new2 = prompt_hidden("Confirm new password: ")
-  return key if new1 != new2
-
-  new_salt = SecureRandom.random_bytes(16)
-  new_key = derive_key(new1, new_salt)
-
-  new_passwords = {}
-
-  vault["passwords"].each do |k, v|
-    plain = decrypt(v, old_key)
-    next if plain.nil?
-    new_passwords[k] = encrypt(plain, new_key)
-  end
-
-  vault["salt"] = Base64.strict_encode64(new_salt)
-  vault["verify"] = encrypt("ok", new_key)
-  vault["passwords"] = new_passwords
-
-  save_vault(vault)
-
-  puts "Master password updated"
-
-  new_key   # ⭐ IMPORTANT
-end
-
-def delete_account
-  confirm = prompt_hidden("Type DELETE to remove account: ")
-
-  if confirm == "DELETE"
-    File.delete(VAULT_FILE) if File.exist?(VAULT_FILE)
-    puts "Account deleted"
-    exit
-  else
-    puts "Cancelled"
-  end
-end
-
-def menu(vault, key)
+def menu(v, key)
   loop do
-    puts "\n1. List"
-    puts "2. Add"
-    puts "3. View"
-    puts "4. Delete entry"
-    puts "5. Change master password"
-    puts "6. Delete account"
-    puts "7. Exit"
-
-    print "Choice: "
-    c = gets&.chomp
-
-    case c
-    when "1" then list(vault)
-    when "2" then add(vault, key)
-    when "3" then view(vault, key)
-    when "4" then delete_entry(vault)
-    when "5"
-      key = change_master(vault, key)
-    when "6" then delete_account
-    when "7" then break
-    else puts "Invalid"
+    puts "\n1 List  2 Add  3 View  4 Delete  5 Exit"
+    case gets.chomp
+    when "1" then list(v)
+    when "2" then add(v, key)
+    when "3" then view(v, key)
+    when "4" then delete(v)
+    when "5" then break
     end
   end
 end
 
 begin
-  result = authenticate
-  exit unless result
-
-  vault, key = result
-  menu(vault, key)
+  res = authenticate
+  exit unless res
+  v, key = res
+  menu(v, key)
 rescue Interrupt
+  puts "\nExit"
 end
