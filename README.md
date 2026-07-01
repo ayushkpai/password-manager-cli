@@ -19,7 +19,7 @@
 - Create a .env
 
   ```
-  echo VAULT_FILE=<where_you_want_.pm.json> >> .env
+  echo VAULT_FILE=<where_you_want_filejson> >> .env
   ```
 
 - To run the project
